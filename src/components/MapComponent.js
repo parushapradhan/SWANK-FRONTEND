@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { MapContainer, TileLayer, Polyline, Popup, useMap } from 'react-leaflet';
 import L from 'leaflet';
+import 'leaflet-control-geocoder/dist/Control.Geocoder.css';
+import 'leaflet-control-geocoder';
 import { useRoadData } from '../context/RoadDataContext';
 import styled from 'styled-components';
 
@@ -59,57 +61,44 @@ const LoadingOverlay = styled.div`
 `;
 
 const RoadLayer = ({ roads }) => {
-  const getRoadClassificationColor = (facType, surfType, highway) => {
-    // Handle OSM highway types first
-    if (highway) {
-      switch (highway) {
-        case 'motorway':
-        case 'motorway_link':
-          return '#0066cc'; // Blue for interstates/motorways
-        case 'trunk':
-        case 'trunk_link':
-          return '#00aa00'; // Green for US routes
-        case 'primary':
-        case 'primary_link':
-          return '#ffaa00'; // Orange for state routes
-        case 'secondary':
-        case 'secondary_link':
-          return '#9966cc'; // Purple for county routes
-        case 'tertiary':
-        case 'tertiary_link':
-          return '#ff6666'; // Red for local roads
-        case 'residential':
-        case 'unclassified':
-          return '#888888'; // Gray for residential/unclassified
+  const getPavementTypeColor = (surfType, surface) => {
+    // Handle OSM surface types first
+    if (surface) {
+      switch (surface.toLowerCase()) {
+        case 'asphalt':
+        case 'paved':
+          return '#2E8B57'; // Sea Green for asphalt
+        case 'concrete':
+          return '#708090'; // Slate Gray for concrete
+        case 'gravel':
+        case 'unpaved':
+          return '#CD853F'; // Peru for gravel/unpaved
+        case 'dirt':
+          return '#8B4513'; // Saddle Brown for dirt
+        case 'paving_stones':
+        case 'cobblestone':
+          return '#A0522D'; // Sienna for stone
+        case 'grass':
+          return '#228B22'; // Forest Green for grass
         default:
-          return '#666666'; // Dark gray for unknown
+          return '#696969'; // Dim Gray for unknown
       }
     }
     
-    // Fallback to CSV facility type classification
-    switch (facType) {
-      case '1': // Interstate
-        return '#0066cc'; // Blue
-      case '2': // US Route
-        return '#00aa00'; // Green
-      case '3': // State Route
-        return '#ffaa00'; // Orange
-      case '4': // County Route
-        return '#9966cc'; // Purple
-      case '5': // Local Road
-        return '#ff6666'; // Red
+    // Fallback to CSV surface type classification
+    switch (surfType) {
+      case '52': // Asphalt
+        return '#2E8B57'; // Sea Green
+      case '61': // Concrete
+        return '#708090'; // Slate Gray
+      case '62': // Composite
+        return '#FF6347'; // Tomato
+      case '63': // Gravel
+        return '#CD853F'; // Peru
+      case '64': // Dirt
+        return '#8B4513'; // Saddle Brown
       default:
-        // Fallback to surface type if facility type not available
-        switch (surfType) {
-          case '52': // Asphalt
-            return '#00aa00'; // Green
-          case '61': // Concrete
-            return '#0066cc'; // Blue
-          case '62': // Composite
-            return '#ffaa00'; // Orange
-          default:
-            return '#888888'; // Gray for unknown
-        }
+        return '#696969'; // Dim Gray for unknown
     }
   };
 
@@ -165,7 +154,7 @@ const RoadLayer = ({ roads }) => {
           return null;
         }
 
-        const color = getRoadClassificationColor(road.fac_type, road.surf_type, road.highway);
+        const color = getPavementTypeColor(road.surf_type, road.surface);
         const weight = getRoadWeight(road.fac_type, road.lane_cnt, road.highway, road.lanes);
 
         return (
@@ -184,9 +173,9 @@ const RoadLayer = ({ roads }) => {
             <Popup>
               <div>
                 <h3>{road.street_name || road.name || 'Unnamed Road'}</h3>
+                <p><strong>Surface Type:</strong> {getSurfaceTypeName(road.surf_type) || road.surface || 'N/A'}</p>
                 <p><strong>Route:</strong> {road.traf_rt_no || road.ref || 'N/A'}</p>
                 <p><strong>Facility Type:</strong> {getFacilityTypeName(road.fac_type) || road.highway || 'N/A'}</p>
-                <p><strong>Surface Type:</strong> {getSurfaceTypeName(road.surf_type) || road.surface || 'N/A'}</p>
                 <p><strong>Condition Index:</strong> {road.rough_indx || 'N/A'}</p>
                 <p><strong>Traffic (AADT):</strong> {road.cur_aadt || 'N/A'}</p>
                 <p><strong>Length:</strong> {
@@ -231,91 +220,54 @@ const getSurfaceTypeName = (surfType) => {
   return types[surfType] || 'Unknown';
 };
 
-const HeatmapLayer = ({ heatmapData }) => {
+
+// Geocoder Control Component
+const GeocoderControl = () => {
   const map = useMap();
 
   useEffect(() => {
-    if (heatmapData.length > 0) {
-      const heatmapPoints = heatmapData.map(point => [
-        point.y_value_bgn,
-        point.x_value_bgn,
-        point.value
-      ]);
-
-      const heatmapLayer = L.heatLayer(heatmapPoints, {
-        radius: 20,
-        blur: 15,
-        maxZoom: 17,
-        gradient: {
-          0.0: 'blue',
-          0.5: 'yellow',
-          1.0: 'red'
+    const geocoder = new L.Control.Geocoder({
+      geocoder: L.Control.Geocoder.nominatim({
+        geocodingQueryParams: {
+          countrycodes: 'us',
+          limit: 5
         }
-      });
+      }),
+      position: 'topright',
+      placeholder: 'Search location...',
+      errorMessage: 'Nothing found.'
+    });
 
-      heatmapLayer.addTo(map);
+    geocoder.addTo(map);
 
-      return () => {
-        map.removeLayer(heatmapLayer);
-      };
-    }
-  }, [heatmapData, map]);
+    // Handle geocoding results
+    geocoder.on('markgeocode', (e) => {
+      const { center, name } = e.geocode;
+      console.log('Geocoded location:', name, 'at', center);
+      
+      // Add a marker for the searched location
+      const marker = L.marker(center).addTo(map);
+      marker.bindPopup(`<b>Searched Location:</b><br/>${name}`).openPopup();
+      
+      // Center and zoom to the location
+      map.setView(center, 12);
+      
+      // Remove marker after 5 seconds
+      setTimeout(() => {
+        map.removeLayer(marker);
+      }, 5000);
+    });
+
+    return () => {
+      map.removeControl(geocoder);
+    };
+  }, [map]);
 
   return null;
 };
 
 const MapComponent = () => {
-  const { roads, heatmapData, loading } = useRoadData();
-  const [showHeatmap, setShowHeatmap] = useState(false);
-  const [showBackground, setShowBackground] = useState(true);
-  const [map, setMap] = useState(null);
-
-  const toggleBackground = useCallback(() => {
-    setShowBackground(!showBackground);
-  }, [showBackground]);
-
-  const searchLocation = useCallback(async (query) => {
-    try {
-      // Use OpenStreetMap Nominatim API for geocoding
-      const response = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query)}&limit=1&countrycodes=us`
-      );
-      const data = await response.json();
-      
-      if (data.length > 0 && map) {
-        const { lat, lon } = data[0];
-        map.setView([parseFloat(lat), parseFloat(lon)], 12);
-      }
-    } catch (error) {
-      console.error('Error searching location:', error);
-    }
-  }, [map]);
-
-  useEffect(() => {
-    const handleToggleBackground = () => {
-      toggleBackground();
-    };
-
-    const handleToggleHeatmap = (event) => {
-      const { show } = event.detail;
-      setShowHeatmap(show);
-    };
-
-    const handleSearchLocation = (event) => {
-      const { query } = event.detail;
-      searchLocation(query);
-    };
-
-    window.addEventListener('toggleBackground', handleToggleBackground);
-    window.addEventListener('toggleHeatmap', handleToggleHeatmap);
-    window.addEventListener('searchLocation', handleSearchLocation);
-    
-    return () => {
-      window.removeEventListener('toggleBackground', handleToggleBackground);
-      window.removeEventListener('toggleHeatmap', handleToggleHeatmap);
-      window.removeEventListener('searchLocation', handleSearchLocation);
-    };
-  }, [map, searchLocation, toggleBackground]);
+  const { roads, loading } = useRoadData();
 
   return (
     <MapWrapper>
@@ -329,46 +281,46 @@ const MapComponent = () => {
         scrollWheelZoom={true}
         doubleClickZoom={true}
         dragging={true}
-        whenCreated={setMap}
       >
-        {showBackground && (
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution='© OpenStreetMap contributors'
-            opacity={0.3}
-          />
-        )}
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution='© OpenStreetMap contributors'
+          opacity={0.3}
+        />
         
+        <GeocoderControl />
         <RoadLayer roads={roads} />
-        
-        {showHeatmap && <HeatmapLayer heatmapData={heatmapData} />}
       </MapContainer>
 
       <Legend>
-        <h4>Pennsylvania Road Classification</h4>
+        <h4>Pavement Types</h4>
         <LegendItem>
-          <LegendColor style={{ background: '#0066cc' }} />
-          <span>Motorway/Interstate</span>
+          <LegendColor style={{ background: '#2E8B57' }} />
+          <span>Asphalt/Paved</span>
         </LegendItem>
         <LegendItem>
-          <LegendColor style={{ background: '#00aa00' }} />
-          <span>Trunk/US Route</span>
+          <LegendColor style={{ background: '#708090' }} />
+          <span>Concrete</span>
         </LegendItem>
         <LegendItem>
-          <LegendColor style={{ background: '#ffaa00' }} />
-          <span>Primary/State Route</span>
+          <LegendColor style={{ background: '#FF6347' }} />
+          <span>Composite</span>
         </LegendItem>
         <LegendItem>
-          <LegendColor style={{ background: '#9966cc' }} />
-          <span>Secondary/County Route</span>
+          <LegendColor style={{ background: '#CD853F' }} />
+          <span>Gravel/Unpaved</span>
         </LegendItem>
         <LegendItem>
-          <LegendColor style={{ background: '#ff6666' }} />
-          <span>Tertiary/Local Road</span>
+          <LegendColor style={{ background: '#8B4513' }} />
+          <span>Dirt</span>
         </LegendItem>
         <LegendItem>
-          <LegendColor style={{ background: '#888888' }} />
-          <span>Residential/Unclassified</span>
+          <LegendColor style={{ background: '#A0522D' }} />
+          <span>Stone/Cobblestone</span>
+        </LegendItem>
+        <LegendItem>
+          <LegendColor style={{ background: '#696969' }} />
+          <span>Unknown/Other</span>
         </LegendItem>
       </Legend>
     </MapWrapper>
